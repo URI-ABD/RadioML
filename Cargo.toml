@@ -9,6 +9,7 @@ name = "radio_ml"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+clam = { path = "../clam" }
 
 [dependencies.pyo3]
 version = "0.17.1"
