@@ -1,6 +1,7 @@
 use ndarray::prelude::*;
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
+use rayon::prelude::*;
 
 fn open_hdf5_file(folders_from_root: &[&str], data_name: &str) -> hdf5::Result<hdf5::File> {
     let mut data_dir = std::path::PathBuf::from("/");
@@ -28,13 +29,13 @@ pub struct RadioData {
 impl RadioData {
     pub fn read(folders_from_root: &[&str], num_samples: usize) -> Self {
         let samples = ModulationMode::variants()
-            .into_iter()
+            .into_par_iter()
             .inspect(|m| println!("Reading from file {:?}", m.data_name()))
             .map(|m| {
                 let handle = open_hdf5_file(folders_from_root, m.data_name()).unwrap();
                 (m, handle)
             })
-            .map(|(&m, handle)| RadioFile::new(handle, m, num_samples).unwrap().join().0)
+            .map(|(m, handle)| RadioFile::new(handle, m, num_samples).unwrap().join().0)
             .collect::<Vec<_>>();
         Self {
             samples,
@@ -43,13 +44,14 @@ impl RadioData {
     }
 
     pub fn validate_sampled(&self) {
-        for (_, s) in ModulationMode::variants().iter().zip(self.samples.iter()) {
-            assert_eq!([26 * self.num_samples, 1024, 2], s.shape());
-        }
+        ModulationMode::variants()
+            .par_iter()
+            .zip(self.samples.par_iter())
+            .for_each(|(_, s)| assert_eq!([26 * self.num_samples, 1024, 2], s.shape()));
     }
 
     pub fn join(self) -> Array3<f64> {
-        let samples = self.samples.iter().map(|s| s.view()).collect::<Vec<_>>();
+        let samples = self.samples.par_iter().map(|s| s.view()).collect::<Vec<_>>();
         ndarray::concatenate(Axis(0), &samples).unwrap()
     }
 }
@@ -78,7 +80,7 @@ pub enum ModulationMode {
     QAM_256,
     APSK_128,
     APSK_16,
-    OOK_2,
+    OOK_2, // Should this exist?
     BPSK,
     QAM_16,
     AM_SSB_WC,
@@ -117,8 +119,8 @@ impl ModulationMode {
         }
     }
 
-    pub fn variants<'a>() -> &'a [ModulationMode] {
-        &[
+    pub fn variants() -> [ModulationMode; 26] {
+        [
             Self::QAM_64,
             Self::QPSK,
             Self::GMSK,
@@ -140,11 +142,11 @@ impl ModulationMode {
             Self::QAM_256,
             Self::APSK_128,
             Self::APSK_16,
-            Self::OOK_2,
+            Self::OOK_2, // Should this exist?
             Self::BPSK,
             Self::QAM_16,
             Self::AM_SSB_WC,
-            Self::Noise_20220222,
+            Self::Noise_20220222, // 24 modulation modes and noise should make 25 elements in the function signature.
         ]
     }
 }
@@ -228,7 +230,7 @@ impl RadioFile {
     }
 
     pub fn join(self) -> (Array3<f64>, ModulationMode) {
-        let sub_iqs = self.levels.iter().map(|i| i.iq.view()).collect::<Vec<_>>();
+        let sub_iqs = self.levels.par_iter().map(|i| i.iq.view()).collect::<Vec<_>>();
         let iq = ndarray::concatenate(Axis(0), &sub_iqs).unwrap();
 
         if matches!(self.modulation, ModulationMode::Noise_20220222) {
@@ -261,7 +263,7 @@ impl SingleSnR {
 
     pub fn subsample(self, indices: &[usize]) -> Self {
         let iq_samples = indices
-            .iter()
+            .par_iter()
             .map(|&i| self.iq.index_axis(Axis(0), i))
             .collect::<Vec<_>>();
         let iq_samples = ndarray::stack(Axis(0), &iq_samples).unwrap();
